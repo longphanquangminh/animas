@@ -1,0 +1,1 @@
+{"name":"animas","version":"1.0.0","type":"module","private":true,"description":"A little skeleton, one night, and ghosts written by an open-weight model.","scripts":{"start":"node server.js","seed":"node tools/seed.mjs"},"engines":{"node":">=18"},"license":"MIT"}

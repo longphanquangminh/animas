@@ -1,0 +1,19 @@
+# One command, whole underworld:  docker compose up -d   →  http://localhost:3000
+services:
+  keeper:
+    build: ./ollama
+    environment: { GEMMA_MODEL: "gemma4:e4b" }   # gemma4:e2b for small boxes, gemma4:12b with 16 GB+
+    volumes: [ "ollama:/root/.ollama" ]
+    restart: unless-stopped
+    # GPU? uncomment:
+    # deploy: { resources: { reservations: { devices: [ { driver: nvidia, count: all, capabilities: [gpu] } ] } } }
+  animas:
+    build: .
+    ports: [ "3000:3000" ]
+    environment:
+      GEMMA_BASE_URL: "http://keeper:11434/v1"
+      GEMMA_MODEL: "gemma4:e4b"
+    volumes: [ "world:/var/data" ]
+    depends_on: [ keeper ]
+    restart: unless-stopped
+volumes: { ollama: {}, world: {} }

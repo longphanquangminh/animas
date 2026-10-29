@@ -1,0 +1,35 @@
+# Render Blueprint: the world (web) + the keeper (private Gemma service). New → Blueprint → pick this repo.
+services:
+  - type: pserv
+    name: animas-keeper
+    runtime: docker
+    dockerfilePath: ./ollama/Dockerfile
+    dockerContext: ./ollama
+    plan: pro                 # 4 GB RAM for gemma4:e2b (Q4); pro plus (8 GB) for gemma4:e4b
+    envVars:
+      - key: GEMMA_MODEL
+        value: gemma4:e2b
+    disk:
+      name: models
+      mountPath: /root/.ollama
+      sizeGB: 10
+  - type: web
+    name: animas
+    runtime: node
+    plan: starter
+    buildCommand: "true"
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: GEMMA_MODEL
+        value: gemma4:e2b
+      - key: GEMMA_BASE_URL
+        fromService: { type: pserv, name: animas-keeper, property: hostport }
+      - key: DATA_DIR
+        value: /var/data
+      - key: TRUST_PROXY
+        value: "1"
+    disk:
+      name: world
+      mountPath: /var/data
+      sizeGB: 1
