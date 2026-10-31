@@ -116,7 +116,7 @@ async function* lines(body, prefix) {
   }
 }
 const post = (url, payload) => fetch(url, { method: "POST",
-  headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.GEMMA_API_KEY || "local"}` }, body: JSON.stringify(payload) });
+  headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.GEMMA_API_KEY || "local"}` }, body: JSON.stringify(payload), signal: AbortSignal.timeout(240000) });
 
 export async function* gemmaStream(system, user, schema = GHOST_SCHEMA, maxTokens = 520) {
   const messages = [{ role: "system", content: system }, { role: "user", content: user }];
@@ -128,7 +128,7 @@ export async function* gemmaStream(system, user, schema = GHOST_SCHEMA, maxToken
     if (!r.ok) throw new Error(`keeper ${r.status}`);
     for await (const d of lines(r.body, "data:")) { if (d.content) yield d.content; if (d.stop) return; }
   } else if (RUNTIME === "ollama") {
-    r = await post(`${ROOT}/api/chat`, { model: GEMMA_MODEL, messages, stream: true, think: false, format: schema, options: { ...SAMPLING, num_predict: maxTokens }, keep_alive: "24h" });
+    r = await post(`${ROOT}/api/chat`, { model: GEMMA_MODEL, messages, stream: true, think: false, format: schema, options: { ...SAMPLING, num_predict: maxTokens, num_ctx: 2048 }, keep_alive: "24h" });
     if (!r.ok) throw new Error(`keeper ${r.status}`);
     for await (const d of lines(r.body)) { if (d.message?.content) yield d.message.content; if (d.done) return; }
   } else {
@@ -225,7 +225,7 @@ function fillSlot(i, announce = true) {
 let writing = false, failures = 0;
 // keep about half of the wandering ghosts holding a letter for someone else who is also wandering
 async function letterLoop() {
-  if (writing) return;
+  if (writing || summonBusy) return;
   const live = W.active.filter(Boolean), withLetter = live.filter((g) => g.letter && W.active.some((r) => r && r.id === g.letter.to));
   if (live.length < 4 || withLetter.length >= Math.floor(live.length / 2)) return;
   const senders = live.filter((g) => !g.letter || !W.active.some((r) => r && r.id === g.letter.to));
@@ -238,7 +238,7 @@ async function letterLoop() {
   writing = false;
 }
 async function keeperLoop() {
-  if (writing || W.pool.length >= POOL_TARGET) return;
+  if (writing || summonBusy || W.pool.length >= POOL_TARGET) return;
   writing = true;
   try {
     const sd = randomSeed();
@@ -294,27 +294,40 @@ async function summon(req, res) {
   summonQueue++; summonLog.push(Date.now());
   while (summonBusy) await new Promise((r) => setTimeout(r, 500));
   summonBusy = true;
-  try { return await runSummon(req, res, ip, memory); } finally { summonBusy = false; summonQueue--; }
+  try { while (writing) await new Promise((r) => setTimeout(r, 250)); return await runSummon(req, res, ip, memory); } finally { summonBusy = false; summonQueue--; }
 }
 let summonBusy = false, summonQueue = 0, summonLog = [];
 async function runSummon(req, res, ip, memory) {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" });
   const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
+  const heartbeat = setInterval(() => res.write(": writing\n\n"), 15000);
   let raw = "";
   try {
     for await (const t of gemmaStream(SUMMON_PROMPT, memory)) { raw += t; send("token", t); }
     const g = parseGhost(raw);
-    if (!g.accepted) { send("refused", { message: "The ofrenda stays quiet." }); return res.end(); }
+    if (!g.accepted) { clearInterval(heartbeat); send("refused", { message: "The ofrenda stays quiet." }); return res.end(); }
     delete g.accepted; g.id = crypto.randomBytes(5).toString("hex"); g.summoned = true; g.model = GEMMA_MODEL;
     // the summoned ghost appears at the ofrenda for everyone (slot 0 belongs to the summoned)
     const prev = W.active[0]; if (prev && !prev.summoned) W.pool.unshift(prev);
     g.slot = 0; W.active[0] = g; dirty = true;
     broadcast("ghost", pub(g)); send("ghost", pub(g));
   } catch (e) { limits.delete("summon:" + ip); send("error", { message: "The keeper is asleep (is the local model running?)" }); console.error("summon:", e.message); }
+  clearInterval(heartbeat);
   res.end();
 }
 
 async function handler(req, res) {
+  const origin = req.headers.origin;
+  const allowed = (process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (origin) {
+    const same = origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}`;
+    if (!same && !allowed.includes(origin)) return json(res, 403, { error: "Origin not allowed. Set ALLOWED_ORIGINS to your Vercel origin." });
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  }
+  if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
   const p = new URL(req.url, "http://x").pathname;
   if (p === "/events") {
     const ip = ipOf(req), mine = [...clients].filter((c) => c.ip === ip).length;

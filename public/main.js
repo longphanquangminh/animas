@@ -9,6 +9,8 @@ import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 
 const Q = new URLSearchParams(location.search);
+const API_BASE = String(window.ANIMAS_CONFIG?.apiBase || "").replace(/\/$/, "");
+const api = (p) => API_BASE + p;
 const SOLO = !Q.has("multi"); // single-player by default; ?multi turns the shared town back on
 const LOW = Q.has("low") || /Mobi|Android/i.test(navigator.userAgent);
 const $ = (s) => document.querySelector(s);
@@ -1553,7 +1555,7 @@ function interact() {
   if (!entered || talk.open) return;
   const g = nearestGhost(); if (g) return openTalk(g);
   if (near(MAILBOX, 3)) return useMailbox();
-  if (near(ALTAR, 4.5)) { if (!net.online) return toast("The ofrenda is quiet tonight. Summoning needs the keeper (run the game with npm start and Gemma).", 5200); return openSummon(); }
+  if (near(ALTAR, 4.5)) { if (!net.online) return toast("The ofrenda is quiet tonight. Summoning needs the keeper (the AI server may be offline; you can still play and deliver letters).", 5200); return openSummon(); }
 }
 function useMailbox() {
   const lost = orphanLetters();
@@ -1625,7 +1627,7 @@ function free(g, remote = false, why = "") {
   g.state = "rising"; g.t = 0; g.label.visible = false;
   for (const q of quests.filter((q) => q.g === g && q.type === "item")) quests.splice(quests.indexOf(q), 1);
   if (!remote) { stats.mine++; const before = wingTier(); prog.total++; try { localStorage.setItem("animas-freed-total", prog.total); } catch {} const after = wingTier(); if (after > before) setTimeout(() => grantWings(after), 3600); else updateWingHud();
-    if (net.online) fetch("/api/free", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.data.id }) }).catch(() => {}); else stats.tonight++; }
+    if (net.online) fetch(api("/api/free"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.data.id }) }).catch(() => {}); else stats.tonight++; }
   updateQuestHud();
   audio.rise(); burst(g.pos.clone().add(new V3(0, 1.2, 0)), new THREE.Color(PALETTE[g.data.color] || 0xffffff), 70, 7, 0.55);
   if (!remote) { const el = $("#crossed"); el.querySelector(".n").textContent = why ? `${why} · ${g.data.name} crossed over` : `${g.data.name} crossed over`; el.querySelector(".e").textContent = g.data.epitaph.replace(/\s*\/\s*/g, "\n"); el.classList.remove("on"); void el.offsetWidth; el.classList.add("on"); }
@@ -1799,14 +1801,14 @@ async function doSummon() {
   const memory = $("#s-text").value.trim(); if (memory.length < 10) return toast("Tell the ofrenda a little more.");
   $("#s-go").disabled = true; $("#s-status").textContent = `the keeper is writing · ${net.model} · grammar-constrained`; $("#s-raw").textContent = "";
   try {
-    const r = await fetch("/api/summon", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ memory }) });
+    const r = await fetch(api("/api/summon"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ memory }), signal: AbortSignal.timeout(300000) });
     if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); throw new Error(j.error || "The ofrenda stays quiet."); }
     const rd = r.body.getReader(), dec = new TextDecoder(); let buf = "", raw = "";
     for (;;) { const { value, done } = await rd.read(); if (done) break; buf += dec.decode(value, { stream: true }); let k;
       while ((k = buf.indexOf("\n\n")) >= 0) { const block = buf.slice(0, k); buf = buf.slice(k + 2);
         const ev = (block.match(/^event: (.*)$/m) || [])[1], data = JSON.parse((block.match(/^data: (.*)$/m) || [, "null"])[1]);
         if (ev === "token") { raw += data; $("#s-raw").textContent = raw.slice(Math.max(0, raw.indexOf("{"))); }
-        else if (ev === "ghost") { const g = spawnGhost(data); closeSummon(); $("#s-text").value = ""; toast(`${data.name} is here, at the ofrenda. Everyone in Mictlán can meet them now.`, 5200); audio.rise(); burst(g.pos.clone().add(new V3(0, 1, 0)), new THREE.Color(1, 0.7, 0.3), 80, 7, 0.5); }
+        else if (ev === "ghost") { const g = spawnGhost(data); closeSummon(); $("#s-text").value = ""; toast(`${data.name} is here, at the ofrenda. Written live by Gemma. Find them near the plaza.`, 5200); audio.rise(); burst(g.pos.clone().add(new V3(0, 1, 0)), new THREE.Color(1, 0.7, 0.3), 80, 7, 0.5); }
         else if (ev === "refused" || ev === "error") throw new Error(data.message); } }
   } catch (e) { toast(e.message || String(e), 5200); }
   $("#s-go").disabled = false; $("#s-status").textContent = "";
@@ -1816,9 +1818,9 @@ async function doSummon() {
 const net = { online: false, model: "Gemma 4" };
 function connect() {
   return new Promise((resolve) => {
-    let done = false; const finish = () => { if (!done) { done = true; resolve(); } };
+    let done = false; let es; const finish = () => { if (!done) { done = true; resolve(); } };
     try {
-      const es = new EventSource("/events");
+      es = new EventSource(api("/events"));
       es.addEventListener("hello", (e) => { const d = JSON.parse(e.data); net.online = true; net.model = d.model || net.model; $("#model").textContent = net.model;
         d.ghosts.forEach((g) => spawnGhost(g, false)); d.lanterns.forEach((l) => lanternFor(l)); stats.tonight = d.freedTonight || 0; updateCounts(); finish(); });
       es.addEventListener("full", (e) => { es.close(); const d = JSON.parse(e.data); toast(`${d.reason}. Playing solo for now.`, 6000); offline().then(finish); });
@@ -1836,12 +1838,13 @@ function connect() {
         for (const [id, o] of others) if (!seen.has(id) && !o.bot) { scene.remove(o.c.root); scene.remove(o.c.shadow); tagScene.remove(o.label); others.delete(id); }
         $("#c-players").textContent = others.size + 1;
       });
-      es.onerror = () => { if (!net.online) { es.close(); offline().then(finish); } };
+      es.onerror = () => { const wasOnline = net.online; net.online = false; $("model").textContent = "Gemma 4 · pre-written"; if (!wasOnline) { es.close(); offline().then(finish); } };
     } catch { offline().then(finish); }
-    setTimeout(() => { if (!done) offline().then(finish); }, 6000);
+    setTimeout(() => { if (!done) { es?.close(); offline().then(finish); } }, 6000);
   });
 }
 async function offline() {
+  $("model").textContent = "Gemma 4 · pre-written";
   if (net.online || ghosts.size) return;
   let seed = window.__DEMO?.ghosts; if (!seed) try { seed = await (await fetch("/seed-ghosts.json")).json(); } catch { seed = []; }
   seed.slice(0, 14).forEach((g, i) => spawnGhost({ ...g, slot: i }, false));
@@ -1852,7 +1855,7 @@ function sendMove(t) {
   if (SOLO) return;
   if (!net.online || t - lastSent < 0.12) return; lastSent = t;
   if (net.blockedUntil && t < net.blockedUntil) return; // backing off after a "full" answer
-  fetch("/api/move", { method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
+  fetch(api("/api/move"), { method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
     body: JSON.stringify({ id: me.id, name: me.name || "Calaca", x: me.pos.x, y: me.pos.y, z: me.pos.z, r: Math.atan2(Math.sin(me.face), Math.cos(me.face)), v: me.speed, hue: me.hue, item: me.item ? ITEMS.indexOf(me.item) : -1, dance: me.dancing, air: !me.grounded }) })
     .then(async (r) => { if (r.status === 429) { const d = await r.json().catch(() => ({})); net.blockedUntil = t + 12; showBlocked(d.reason || "Mictlán is full tonight"); } else if (net.blocked) hideBlocked(); })
     .catch(() => {});

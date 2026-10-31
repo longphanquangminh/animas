@@ -154,7 +154,7 @@
  {
   "name": "Mateo",
   "from": "Valle Verde, 1940s",
-  "life": "Minh spent his youth passionately practicing soccer in the dusty fields.",
+  "life": "Mateo spent his youth passionately practicing soccer in the dusty fields.",
   "personality": "gentle",
   "color": "turquoise",
   "greeting": "Well hello there, little skeleton! You look like you're on a very important errand.",
@@ -166,7 +166,7 @@
   "ms": 57435,
   "id": "s05",
   "seed": {
-   "name": "Minh",
+   "name": "Mateo",
    "place": "Valle Verde",
    "decade": "1940s",
    "work": "kid who loved football",

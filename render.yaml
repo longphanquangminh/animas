@@ -21,6 +21,10 @@ services:
     startCommand: node server.js
     healthCheckPath: /api/health
     envVars:
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: GEMMA_RUNTIME
+        value: ollama
       - key: GEMMA_MODEL
         value: gemma4:e2b
       - key: GEMMA_BASE_URL
