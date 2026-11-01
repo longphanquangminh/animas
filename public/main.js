@@ -1798,8 +1798,8 @@ function openSummon() { document.body.classList.add("summoning"); if (document.p
 function closeSummon() { document.body.classList.remove("summoning"); }
 $("#s-close").onclick = closeSummon; $("#s-go").onclick = () => doSummon();
 async function doSummon() {
-  const memory = $("#s-text").value.trim(); if (memory.length < 10) return toast("Tell the ofrenda a little more.");
-  $("#s-go").disabled = true; $("#s-status").textContent = `the keeper is writing · ${net.model} · grammar-constrained`; $("#s-raw").textContent = "";
+  const memory = $("#s-text").value.trim(); if (memory.length < 10) { $("#s-status").textContent = "Describe someone and one memory (at least 10 characters)."; return; }
+  $("#s-go").disabled = true; $("#s-go").textContent = "Writing…"; $("#s-status").textContent = "Gemma is creating a ghost. CPU generation may take a few minutes."; $("#s-raw").textContent = ""; let created = false;
   try {
     const r = await fetch(api("/api/summon"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ memory }), signal: AbortSignal.timeout(300000) });
     if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); throw new Error(j.error || "The ofrenda stays quiet."); }
@@ -1808,10 +1808,13 @@ async function doSummon() {
       while ((k = buf.indexOf("\n\n")) >= 0) { const block = buf.slice(0, k); buf = buf.slice(k + 2);
         const ev = (block.match(/^event: (.*)$/m) || [])[1], data = JSON.parse((block.match(/^data: (.*)$/m) || [, "null"])[1]);
         if (ev === "token") { raw += data; $("#s-raw").textContent = raw.slice(Math.max(0, raw.indexOf("{"))); }
-        else if (ev === "ghost") { const g = spawnGhost(data); closeSummon(); $("#s-text").value = ""; toast(`${data.name} is here, at the ofrenda. Written live by Gemma. Find them near the plaza.`, 5200); audio.rise(); burst(g.pos.clone().add(new V3(0, 1, 0)), new THREE.Color(1, 0.7, 0.3), 80, 7, 0.5); }
-        else if (ev === "refused" || ev === "error") throw new Error(data.message); } }
-  } catch (e) { toast(e.message || String(e), 5200); }
-  $("#s-go").disabled = false; $("#s-status").textContent = "";
+        else if (ev === "ghost") { created = true; const g = spawnGhost(data); closeSummon(); $("#s-text").value = ""; toast(`${data.name} is here, at the ofrenda. Written live by Gemma. Find them near the plaza.`, 5200); audio.rise(); burst(g.pos.clone().add(new V3(0, 1, 0)), new THREE.Color(1, 0.7, 0.3), 80, 7, 0.5); }
+        else if (ev === "refused") throw new Error("Please describe a person and one memory about them. Summon creates a ghost; it is not a chat.");
+        else if (ev === "error") throw new Error(data.message); } }
+    if (!created) throw new Error("No ghost was received. Please try again when the keeper is ready.");
+    $("#s-status").textContent = "Ghost created by Gemma.";
+  } catch (e) { $("#s-status").textContent = e.name === "TimeoutError" ? "Gemma took too long. You can keep playing and try again later." : (e.message || String(e)); }
+  finally { $("#s-go").disabled = false; $("#s-go").textContent = "Summon"; }
 }
 
 // ============================================================================ network (shared world)
